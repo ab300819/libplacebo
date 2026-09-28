@@ -16,3 +16,6 @@
 [submodule "3rdparty/fast_float"]
 	path = 3rdparty/fast_float
 	url = https://github.com/fastfloat/fast_float.git
+[submodule "3rdparty/metal-cpp"]
+	path = 3rdparty/metal-cpp
+	url = https://github.com/bkaradzic/metal-cpp.git
