@@ -104,7 +104,31 @@ macos:
                       -Ddefault_library=both
                       -Dtests=true
                       -Ddebug-abort=true
+                      -Dmetal=disabled
                       -Dc_args='-mmacosx-version-min=10.11 -Wunguarded-availability'
+                      --werror
+        - ninja -C build
+        - cd build && meson test -t 5 -v --num-processes=1
+
+macos-metal:
+    stage: compile
+    tags:
+        - amd64
+        - monterey
+    script:
+        - brew install spirv-cross
+        - python3 -m venv venv
+        - source venv/bin/activate
+        - pip install meson
+        # The Metal backend needs a 12.0 deployment target, so it cannot ride
+        # along in the 10.11 job above; that one exercises the disabled path.
+        - meson build --buildtype release
+                      -Ddefault_library=both
+                      -Dtests=true
+                      -Ddebug-abort=true
+                      -Dmetal=enabled
+                      -Dc_args='-mmacosx-version-min=12.0 -Wunguarded-availability'
+                      -Dcpp_args='-mmacosx-version-min=12.0 -Wunguarded-availability'
                       --werror
         - ninja -C build
         - cd build && meson test -t 5 -v --num-processes=1
