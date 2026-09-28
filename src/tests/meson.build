@@ -1,5 +1,5 @@
 gpu_tests = [
-  'vulkan.c', 'opengl_surfaceless.c', 'd3d11.c', 'dummy.c'
+  'vulkan.c', 'opengl_surfaceless.c', 'd3d11.c', 'dummy.c', 'metal.c'
 ]
 
 ts = []
@@ -11,6 +11,12 @@ foreach t : tests
   endif
   if t == 'vulkan.c'
     deps += vulkan_headers
+  endif
+  if t == 'metal.c'
+    # The backend only passes IOSurfaceRef through to Metal, but this test
+    # creates and locks real IOSurfaces, so it needs the framework itself.
+    deps += dependency('appleframeworks',
+                       modules: ['IOSurface', 'CoreFoundation'])
   endif
   sources = []
   if gpu_tests.contains(t)

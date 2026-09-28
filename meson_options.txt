@@ -20,6 +20,9 @@ option('gl-proc-addr', type: 'feature', value: 'auto',
 option('d3d11', type: 'feature', value: 'auto',
        description: 'Direct3D 11 based renderer')
 
+option('metal', type: 'feature', value: 'auto',
+       description: 'Metal-based renderer')
+
 option('glslang', type: 'feature', value: 'auto',
        description: 'glslang SPIR-V compiler')
 

@@ -1,7 +1,7 @@
 // License: CC0 / Public Domain
 
-#if !defined(USE_GL) && !defined(USE_VK) || defined(USE_GL) && defined(USE_VK)
-#error Specify exactly one of -DUSE_GL or -DUSE_VK when compiling!
+#if defined(USE_GL) + defined(USE_VK) + defined(USE_MTL) != 1
+#error Specify exactly one of -DUSE_GL, -DUSE_VK or -DUSE_MTL when compiling!
 #endif
 
 #include <SDL.h>
@@ -28,6 +28,15 @@
 #define IMPL_TAG "sdl2-gl"
 #endif
 
+#ifdef USE_MTL
+#include <libplacebo/metal.h>
+#include <SDL_metal.h>
+#define WINFLAG_API SDL_WINDOW_METAL
+#define IMPL win_impl_sdl_mtl
+#define IMPL_NAME "SDL2 (metal)"
+#define IMPL_TAG "sdl2-mtl"
+#endif
+
 #ifdef NDEBUG
 #define DEBUG false
 #else
@@ -49,6 +58,11 @@ struct priv {
 #ifdef USE_GL
     SDL_GLContext gl_ctx;
     pl_opengl gl;
+#endif
+
+#ifdef USE_MTL
+    pl_metal metal;
+    SDL_MetalView metal_view;
 #endif
 
     int scroll_dx, scroll_dy;
@@ -85,7 +99,8 @@ static struct window *sdl_create(pl_log log, const struct window_params *params)
         goto error;
     }
 
-    uint32_t sdl_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | WINFLAG_API;
+    uint32_t sdl_flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE |
+                         SDL_WINDOW_ALLOW_HIGHDPI | WINFLAG_API;
     p->win = SDL_CreateWindow(params->title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
                               params->width, params->height, sdl_flags);
     if (!p->win) {
@@ -188,6 +203,37 @@ static struct window *sdl_create(pl_log log, const struct window_params *params)
     SDL_GL_GetDrawableSize(p->win, &w, &h);
 #endif // USE_GL
 
+#ifdef USE_MTL
+    p->metal = pl_metal_create(log, NULL);
+    if (!p->metal) {
+        fprintf(stderr, "libplacebo: Failed creating metal device\n");
+        goto error;
+    }
+
+    p->metal_view = SDL_Metal_CreateView(p->win);
+    if (!p->metal_view) {
+        fprintf(stderr, "SDL2: Failed creating Metal view: %s\n", SDL_GetError());
+        goto error;
+    }
+
+    void *layer = SDL_Metal_GetLayer(p->metal_view);
+    if (!layer) {
+        fprintf(stderr, "SDL2: Failed getting CAMetalLayer\n");
+        goto error;
+    }
+
+    p->w.swapchain = pl_metal_create_swapchain(p->metal, pl_metal_swapchain_params(
+        .layer = layer,
+    ));
+    if (!p->w.swapchain) {
+        fprintf(stderr, "libplacebo: Failed creating metal swapchain\n");
+        goto error;
+    }
+
+    p->w.gpu = p->metal->gpu;
+    SDL_Metal_GetDrawableSize(p->win, &w, &h);
+#endif // USE_MTL
+
     pl_swapchain_colorspace_hint(p->w.swapchain, &params->colors);
     if (!pl_swapchain_resize(p->w.swapchain, &w, &h)) {
         fprintf(stderr, "libplacebo: Failed initializing swapchain\n");
@@ -224,6 +270,12 @@ static void sdl_destroy(struct window **window)
     SDL_GL_DeleteContext(p->gl_ctx);
 #endif
 
+#ifdef USE_MTL
+    if (p->metal_view)
+        SDL_Metal_DestroyView(p->metal_view);
+    pl_metal_destroy(&p->metal);
+#endif
+
     for (int i = 0; i < p->files_num; i++)
         SDL_free(p->files[i]);
     free(p->files);
@@ -248,6 +300,11 @@ static inline void handle_event(struct priv *p, SDL_Event *event)
 
         if (event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
             int width = event->window.data1, height = event->window.data2;
+#ifdef USE_MTL
+            // The event reports points, but the Metal swapchain sizes its
+            // drawable in pixels, which differ on a HiDPI display.
+            SDL_Metal_GetDrawableSize(p->win, &width, &height);
+#endif
             if (!pl_swapchain_resize(p->w.swapchain, &width, &height)) {
                 fprintf(stderr, "libplacebo: Failed resizing swapchain? Exiting...\n");
                 p->w.window_lost = true;

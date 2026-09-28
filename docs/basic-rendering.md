@@ -134,8 +134,9 @@ int main()
 All GPU operations are abstracted into an internal `pl_gpu` object, which
 serves as the primary entry-point to any sort of GPU interaction. This object
 cannot be created directly, but must be obtained from some graphical API:
-currently there are Vulkan, OpenGL or D3D11. A `pl_gpu` can be accessed from
-an API-specific object like `pl_vulkan`, `pl_opengl` and `pl_d3d11`.
+currently there are Vulkan, OpenGL, D3D11 or Metal. A `pl_gpu` can be accessed
+from an API-specific object like `pl_vulkan`, `pl_opengl`, `pl_d3d11` and
+`pl_metal`.
 
 In this guide, for simplicity, we will be using OpenGL, simply because that's
 what GLFW initializes by default.

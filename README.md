@@ -41,12 +41,13 @@ Expert-level functionality is packed into easy-to-use functions like
 
 ### Hardware requirements
 
-libplacebo currently supports Vulkan (including MoltenVK), OpenGL, and
-Direct3D 11. It currently has the following minimum hardware requirements:
+libplacebo currently supports Vulkan (including MoltenVK), OpenGL, Direct3D
+11 and Metal. It currently has the following minimum hardware requirements:
 
 - **Vulkan**: Core version 1.2
 - **OpenGL**: GLSL version >= 130 (GL >= 3.0, GL ES >= 3.0)
 - **Direct3D**: Feature level >= 9_1
+- **Metal**: Apple GPU (Apple silicon Mac, macOS >= 12.0; iOS >= 15.0)
 
 For more documentation, including an introduction to the API, see [the project
 website](https://libplacebo.org).
@@ -137,6 +138,7 @@ and even the GPU in general.
 - `vulkan.h`: GPU API implementation based on Vulkan.
 - `opengl.h`: GPU API implementation based on OpenGL.
 - `d3d11.h`: GPU API implementation based on Direct3D 11.
+- `metal.h`: GPU API implementation based on Metal.
 - `dummy.h`: Dummy GPI API (interfaces with CPU only, no shader support)
 
 As part of the public API, libplacebo exports a middle-level abstraction for
@@ -277,16 +279,17 @@ on distro packages.
 
 In principle, libplacebo has no mandatory dependencies - only optional ones.
 However, to get a useful version of libplacebo. you most likely want to build
-with support for either `opengl`, `vulkan` or `d3d11`. libplacebo built without
-these can still be used (e.g. to generate GLSL shaders such as the ones used in
-VLC), but the usefulness is severely impacted since most components will be
-missing, impaired or otherwise not functional.
+with support for either `opengl`, `vulkan`, `d3d11` or `metal`. libplacebo
+built without these can still be used (e.g. to generate GLSL shaders such as
+the ones used in VLC), but the usefulness is severely impacted since most
+components will be missing, impaired or otherwise not functional.
 
 A full list of optional dependencies each feature requires:
 
 - **glslang**: `glslang` + its related libraries (e.g. `libSPIRV.so`)
 - **lcms**: `liblcms2`
 - **libdovi**: `libdovi`
+- **metal**: `spirv-cross-c`, `metal-cpp` (*)
 - **opengl**: `glad2` (*)
 - **shaderc**: `libshaderc`
 - **vulkan**: `libvulkan`, `python3-jinja2` (*)
