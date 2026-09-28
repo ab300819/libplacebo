@@ -52,4 +52,15 @@ foreach t : ts
   test(t['test'], e, timeout: 120)
 endforeach
 
+# Cross-backend comparison test: only when Metal + Vulkan are both enabled
+if components.get('metal') and components.get('vulkan')
+  cross_be = executable('test.cross_backend.c', 'cross_backend.c',
+      c_args: [ '-Wno-unused-function' ],
+      dependencies: [tdep_static, vulkan_headers],
+      link_args: link_args,
+      link_depends: link_depends,
+  )
+  test('cross_backend.c', cross_be, timeout: 120)
+endif
+
 subdir('include')
