@@ -534,13 +534,25 @@ static void metal_swapchain_tests(pl_metal metal)
     REQUIRE(pl_swapchain_resize(sw, &w, &h));
     REQUIRE_CMP(w, ==, (int) W, "d");
 
-    // An HDR hint must be accepted (or degrade) without failing or crashing
+    // An HDR hint must switch the default 8-bit layer to a 10-bit format, and
+    // an SDR hint must switch it back
     printf("- testing HDR colorspace hint\n");
     pl_swapchain_colorspace_hint(sw, &(struct pl_color_space) {
         .primaries = PL_COLOR_PRIM_BT_2020,
         .transfer = PL_COLOR_TRC_PQ,
     });
+    struct pl_swapchain_frame hf = {0};
+    REQUIRE(pl_swapchain_start_frame(sw, &hf));
+    REQUIRE_CMP(hf.color_space.transfer, ==, PL_COLOR_TRC_PQ, "d");
+    REQUIRE_CMP(hf.fbo->params.format->component_depth[0], ==, 10, "d");
+    pl_tex_clear(gpu, hf.fbo, (float[4]) {0});
+    REQUIRE(pl_swapchain_submit_frame(sw));
+    pl_swapchain_swap_buffers(sw);
     pl_swapchain_colorspace_hint(sw, &pl_color_space_srgb);
+    REQUIRE(pl_swapchain_start_frame(sw, &hf));
+    REQUIRE_CMP(hf.fbo->params.format->component_depth[0], ==, 8, "d");
+    REQUIRE(pl_swapchain_submit_frame(sw));
+    pl_swapchain_swap_buffers(sw);
     REQUIRE(!pl_gpu_is_failed(gpu));
 
     // Linear Display P3 has no layer colorspace of its own; whatever the layer

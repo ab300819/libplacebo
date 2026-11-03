@@ -31,6 +31,7 @@ struct priv {
     pl_tex backbuffer;
     struct pl_color_space current_csp;
     NS::AutoreleasePool *frame_pool;
+    bool auto_fmt; // layer pixel format is ours to pick per colorspace
 };
 
 static pl_fmt find_layer_fmt(pl_gpu gpu, MTL::PixelFormat fmt)
@@ -105,6 +106,10 @@ static CGColorSpaceRef csp_to_cgcolorspace(struct pl_color_space *csp)
     }
 
     if (csp->primaries == PL_COLOR_PRIM_DISPLAY_P3) {
+        if (csp->transfer == PL_COLOR_TRC_PQ)
+            return CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3_PQ);
+        if (csp->transfer == PL_COLOR_TRC_HLG)
+            return CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3_HLG);
         csp->transfer = PL_COLOR_TRC_SRGB;
         return CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3);
     }
@@ -126,6 +131,17 @@ static void metal_sw_colorspace_hint(pl_swapchain sw, const struct pl_color_spac
 
     bool needs_edr = applied.transfer == PL_COLOR_TRC_PQ ||
                      applied.transfer == PL_COLOR_TRC_HLG;
+
+    // 8 bits band visibly with PQ/HLG or linear light; keep a format the
+    // caller chose themselves
+    if (p->auto_fmt) {
+        MTL::PixelFormat pf = MTL::PixelFormatBGRA8Unorm;
+        if (needs_edr)
+            pf = MTL::PixelFormatRGB10A2Unorm;
+        else if (applied.transfer == PL_COLOR_TRC_LINEAR)
+            pf = MTL::PixelFormatRGBA16Float;
+        p->layer->setPixelFormat(pf);
+    }
 
     // CAMetalLayer.wantsExtendedDynamicRangeContent is macOS 10.11+ but only
     // iOS 16+, and is unavailable on tvOS. Probe for it rather than sending an
@@ -280,7 +296,11 @@ pl_swapchain pl_metal_create_swapchain(pl_metal metal,
     p->layer->retain();
     p->layer->setDevice((MTL::Device *) metal->device);
     p->layer->setFramebufferOnly(false);
-    if (p->layer->pixelFormat() == MTL::PixelFormatInvalid)
+    // BGRA8Unorm is CAMetalLayer's default, so treat it as "not chosen"
+    MTL::PixelFormat lfmt = p->layer->pixelFormat();
+    p->auto_fmt = lfmt == MTL::PixelFormatInvalid ||
+                  lfmt == MTL::PixelFormatBGRA8Unorm;
+    if (lfmt == MTL::PixelFormatInvalid)
         p->layer->setPixelFormat(MTL::PixelFormatBGRA8Unorm);
     p->current_csp = pl_color_space_srgb;
 
