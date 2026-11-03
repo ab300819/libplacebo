@@ -30,7 +30,6 @@ struct priv {
     CA::MetalDrawable *drawable;
     pl_tex backbuffer;
     struct pl_color_space current_csp;
-    NS::AutoreleasePool *frame_pool;
     bool auto_fmt; // layer pixel format is ours to pick per colorspace
 };
 
@@ -50,8 +49,6 @@ static void metal_sw_destroy(pl_swapchain sw)
     pl_tex_destroy(sw->gpu, &p->backbuffer);
     if (p->drawable)
         p->drawable->release();
-    if (p->frame_pool)
-        p->frame_pool->release();
     if (p->layer)
         p->layer->release();
     pl_free((void *) sw);
@@ -175,13 +172,9 @@ static bool metal_sw_start_frame(pl_swapchain sw, struct pl_swapchain_frame *out
         return false;
     }
 
-    // Drain any previous pool and create a fresh one for this frame.
-    // Metal API methods (nextDrawable, commandBuffer, renderCommandEncoder,
-    // etc.) return autoreleased objects. Without a pool these accumulate
-    // indefinitely, causing unbounded memory growth.
-    if (p->frame_pool)
-        p->frame_pool->release();
-    p->frame_pool = NS::AutoreleasePool::alloc()->init();
+    // Scoped per call: a pool held open until submit_frame would pop any
+    // pool the caller pushed in between. The drawable is retained below.
+    metal_autorelease pool;
 
     p->drawable = p->layer->nextDrawable();
     if (!p->drawable)
@@ -244,6 +237,7 @@ static bool metal_sw_submit_frame(pl_swapchain sw)
     if (!gpu_p->pending_cb)
         return false;
 
+    metal_autorelease pool;
     gpu_p->pending_cb->presentDrawable(p->drawable);
     bool ok = metal_advance_cmd_buffer(gpu_p, false);
     if (!ok)
@@ -252,11 +246,6 @@ static bool metal_sw_submit_frame(pl_swapchain sw)
     pl_tex_destroy(sw->gpu, &p->backbuffer);
     p->drawable->release();
     p->drawable = NULL;
-
-    if (p->frame_pool) {
-        p->frame_pool->release();
-        p->frame_pool = NULL;
-    }
 
     return ok && !metal_is_failed(gpu_p);
 }

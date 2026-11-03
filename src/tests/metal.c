@@ -26,6 +26,10 @@
 #include <objc/message.h>
 #include <objc/runtime.h>
 
+// Public ObjC runtime entry points, not declared in any SDK header
+void *objc_autoreleasePoolPush(void);
+void objc_autoreleasePoolPop(void *pool);
+
 #include <libplacebo/dispatch.h>
 #include <libplacebo/metal.h>
 #include <libplacebo/renderer.h>
@@ -551,7 +555,10 @@ static void metal_swapchain_tests(pl_metal metal)
     pl_swapchain_colorspace_hint(sw, &pl_color_space_srgb);
     REQUIRE(pl_swapchain_start_frame(sw, &hf));
     REQUIRE_CMP(hf.fbo->params.format->component_depth[0], ==, 8, "d");
+    // A caller pool opened mid-frame must survive submit_frame
+    void *caller_pool = objc_autoreleasePoolPush();
     REQUIRE(pl_swapchain_submit_frame(sw));
+    objc_autoreleasePoolPop(caller_pool);
     pl_swapchain_swap_buffers(sw);
     REQUIRE(!pl_gpu_is_failed(gpu));
 
