@@ -167,8 +167,10 @@ pl_tex pl_metal_tex_create(pl_gpu gpu, const struct pl_tex_params *params)
 
     if (tex->params.sampleable)
         usage = (MTL::TextureUsage) (usage | MTL::TextureUsageShaderRead);
+    // Storage images may also be read (imageLoad), which needs ShaderRead
     if (params->storable)
-        usage = (MTL::TextureUsage) (usage | MTL::TextureUsageShaderWrite);
+        usage = (MTL::TextureUsage) (usage | MTL::TextureUsageShaderRead |
+                                     MTL::TextureUsageShaderWrite);
     if (tex->params.renderable)
         usage = (MTL::TextureUsage) (usage | MTL::TextureUsageRenderTarget);
     desc->setUsage(usage);

@@ -1051,6 +1051,60 @@ static void metal_vertex_format_tests(pl_gpu gpu)
     pl_tex_destroy(gpu, &fbo);
 }
 
+static void rw_store(pl_dispatch dp, pl_tex tex, bool read)
+{
+    pl_shader sh = pl_dispatch_begin(dp);
+    REQUIRE(sh_try_compute(sh, 4, 4, false, 0));
+    ident_t img = sh_desc(sh, (struct pl_shader_desc) {
+        .binding.object = tex,
+        .desc = {
+            .name   = "img",
+            .type   = PL_DESC_STORAGE_IMG,
+            .access = read ? PL_DESC_ACCESS_READWRITE : PL_DESC_ACCESS_WRITEONLY,
+        },
+    });
+    GLSL("ivec2 pos = ivec2(gl_GlobalInvocationID.xy); \n");
+    if (read)
+        GLSL("imageStore("$", pos, imageLoad("$", pos) * vec4(0.5)); \n", img, img);
+    else
+        GLSL("imageStore("$", pos, vec4(0.5)); \n", img);
+    REQUIRE(pl_dispatch_compute(dp, pl_dispatch_compute_params(
+        .shader = &sh, .dispatch_size = {1, 1, 1})));
+}
+
+// Every format advertising READWRITE must really work as a read_write image:
+// halving a cleared 1.0 must give the same texels as storing 0.5 directly.
+// dispatch.c only declares float `image2D`s, so integer formats are skipped.
+static void metal_readwrite_tests(pl_gpu gpu)
+{
+    printf("metal_readwrite_tests:\n");
+    pl_dispatch dp = pl_dispatch_create(gpu->log, gpu);
+    REQUIRE(dp);
+    for (int i = 0; i < gpu->num_formats; i++) {
+        pl_fmt fmt = gpu->formats[i];
+        if (!(fmt->caps & PL_FMT_CAP_READWRITE) ||
+            fmt->type == PL_FMT_UINT || fmt->type == PL_FMT_SINT)
+            continue;
+        printf("- %s\n", fmt->name);
+        pl_tex tex[2];
+        uint8_t px[2][4 * 4 * 16];
+        for (int j = 0; j < 2; j++) {
+            tex[j] = pl_tex_create(gpu, pl_tex_params(
+                .w = 4, .h = 4, .format = fmt, .storable = true,
+                .blit_dst = true, .host_readable = true));
+            REQUIRE(tex[j]);
+            pl_tex_clear(gpu, tex[j], (float[4]) {1.0, 1.0, 1.0, 1.0});
+            rw_store(dp, tex[j], j == 0);
+            REQUIRE(pl_tex_download(gpu, pl_tex_transfer_params(
+                .tex = tex[j], .ptr = px[j])));
+        }
+        REQUIRE_MEMEQ(px[0], px[1], 4 * 4 * fmt->texel_size);
+        pl_tex_destroy(gpu, &tex[0]);
+        pl_tex_destroy(gpu, &tex[1]);
+    }
+    pl_dispatch_destroy(&dp);
+}
+
 int main(void)
 {
     pl_log log = pl_test_logger();
@@ -1073,6 +1127,7 @@ int main(void)
     metal_wrap_tests(metal);
     metal_timer_tests(metal->gpu);
     metal_vertex_format_tests(metal->gpu);
+    metal_readwrite_tests(metal->gpu);
 
     pl_metal_destroy(&metal);
     pl_log_destroy(&log);
