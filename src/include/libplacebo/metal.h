@@ -44,6 +44,10 @@ typedef const struct pl_metal_t {
     // purposes, including retaining the device and using it beyond the
     // lifetime of the pl_metal that created it.
     void *device; // MTL::Device * / id<MTLDevice>
+
+    // The MTL::CommandQueue all GPU work is submitted to. Work the user
+    // submits to this queue is ordered after everything libplacebo flushed.
+    void *queue; // MTL::CommandQueue * / id<MTLCommandQueue>
 } *pl_metal;
 
 struct pl_metal_params {
@@ -51,6 +55,10 @@ struct pl_metal_params {
     // its own device using MTL::CreateSystemDefaultDevice().
     // If set, pl_metal_create will retain the device.
     void *device; // MTL::Device * / id<MTLDevice>
+
+    // The command queue to submit to. Optional. If NULL, libplacebo creates
+    // its own. If set, it must belong to `device` and will be retained.
+    void *queue; // MTL::CommandQueue * / id<MTLCommandQueue>
 };
 
 #define pl_metal_params(...) (&(struct pl_metal_params) { __VA_ARGS__ })

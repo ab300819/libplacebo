@@ -276,8 +276,17 @@ pl_gpu pl_gpu_create_metal(struct metal_ctx *ctx)
     // System device: refcount 1 + 1 retain - 2 releases = balanced.
     device->retain();
 
-    // Create command queue
-    p->queue = device->newCommandQueue();
+    p->queue = (MTL::CommandQueue *) ctx->metal->queue;
+    if (p->queue && p->queue->device() != device) {
+        PL_FATAL(gpu, "Metal command queue belongs to a different device");
+        p->queue = NULL;
+        goto error;
+    }
+    if (p->queue) {
+        p->queue->retain();
+    } else {
+        p->queue = device->newCommandQueue();
+    }
     if (!p->queue) {
         PL_FATAL(gpu, "Failed creating Metal command queue");
         goto error;

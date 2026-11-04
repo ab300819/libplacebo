@@ -17,7 +17,7 @@
 
 #include "gpu.h"
 
-const struct pl_metal_params pl_metal_default_params = {0};
+const struct pl_metal_params pl_metal_default_params = {};
 
 extern "C"
 pl_metal pl_metal_create(pl_log log, const struct pl_metal_params *params)
@@ -43,6 +43,7 @@ pl_metal pl_metal_create(pl_log log, const struct pl_metal_params *params)
     }
 
     metal->device = device;
+    metal->queue = params->queue;
 
     // Only Apple7+ GPUs (A14, M1 and later) are supported: Intel and AMD GPUs
     // cannot use shared storage for textures, and the advertised limits and
@@ -57,6 +58,7 @@ pl_metal pl_metal_create(pl_log log, const struct pl_metal_params *params)
     metal->gpu = pl_gpu_create_metal(ctx);
     if (!metal->gpu)
         goto error;
+    metal->queue = ((struct pl_gpu_metal *) PL_PRIV(metal->gpu))->queue;
 
     success = true;
 

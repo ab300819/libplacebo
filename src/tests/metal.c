@@ -1143,6 +1143,36 @@ static void metal_readwrite_tests(pl_gpu gpu)
     pl_dispatch_destroy(&dp);
 }
 
+// A user-supplied command queue must be used, exposed and left alive
+static void metal_queue_tests(pl_log log, pl_metal metal)
+{
+    printf("metal_queue_tests:\n");
+    id queue = ((id (*)(id, SEL)) objc_msgSend)(
+        (id) metal->device, sel_registerName("newCommandQueue"));
+    REQUIRE(queue);
+    pl_metal m2 = pl_metal_create(log, pl_metal_params(
+        .device = metal->device, .queue = (void *) queue));
+    REQUIRE(m2);
+    REQUIRE(m2->queue == (void *) queue);
+    REQUIRE(metal->queue && metal->queue != (void *) queue);
+
+    pl_buf buf = pl_buf_create(m2->gpu, pl_buf_params(
+        .size = 16, .host_writable = true, .host_readable = true));
+    REQUIRE(buf);
+    static const uint32_t data[4] = {1, 2, 3, 4};
+    uint32_t out[4] = {0};
+    pl_buf_write(m2->gpu, buf, 0, data, sizeof(data));
+    REQUIRE(pl_buf_read(m2->gpu, buf, 0, out, sizeof(out)));
+    REQUIRE_MEMEQ(out, data, sizeof(out));
+    pl_buf_destroy(m2->gpu, &buf);
+    pl_metal_destroy(&m2);
+
+    unsigned long rc = ((unsigned long (*)(id, SEL)) objc_msgSend)(
+        queue, sel_registerName("retainCount"));
+    REQUIRE_CMP(rc, ==, 1, "lu");
+    ((void (*)(id, SEL)) objc_msgSend)(queue, sel_registerName("release"));
+}
+
 int main(void)
 {
     pl_log log = pl_test_logger();
@@ -1166,6 +1196,7 @@ int main(void)
     metal_timer_tests(metal->gpu);
     metal_vertex_format_tests(metal->gpu);
     metal_readwrite_tests(metal->gpu);
+    metal_queue_tests(log, metal);
 
     pl_metal_destroy(&metal);
     pl_log_destroy(&log);
