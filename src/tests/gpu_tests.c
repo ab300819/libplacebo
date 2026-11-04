@@ -1183,6 +1183,54 @@ static void render_info_cb(void *priv, const struct pl_render_info *info)
     REQUIRE(info->pass->shader->description);
 }
 
+static struct pl_hook_res broken_hook(void *priv, const struct pl_hook_params *params)
+{
+    pl_shader sh = pl_dispatch_begin(params->dispatch);
+    pl_shader_sample_direct(sh, pl_sample_src( .tex = params->tex ));
+    pl_shader_custom(sh, &(struct pl_custom_shader) {
+        .body     = "color = undefined_variable;",
+        .input    = PL_SHADER_SIG_COLOR,
+        .output   = PL_SHADER_SIG_COLOR,
+        .output_w = params->tex->params.w,
+        .output_h = params->tex->params.h,
+    });
+    return (struct pl_hook_res) {
+        .output     = PL_HOOK_SIG_COLOR,
+        .sh         = sh,
+        .repr       = params->repr,
+        .color      = params->color,
+        .components = params->components,
+        .rect       = params->rect,
+    };
+}
+
+// Same, but for a pre-sampled input, so there is no texture to fall back to.
+// `priv` is the image texture, for the output size.
+static struct pl_hook_res broken_color_hook(void *priv, const struct pl_hook_params *params)
+{
+    pl_tex size = priv;
+    pl_shader_custom(params->sh, &(struct pl_custom_shader) {
+        .body     = "color = undefined_variable;",
+        .input    = PL_SHADER_SIG_COLOR,
+        .output   = PL_SHADER_SIG_COLOR,
+        .output_w = size->params.w,
+        .output_h = size->params.h,
+    });
+    return (struct pl_hook_res) {
+        .output     = PL_HOOK_SIG_COLOR,
+        .sh         = params->sh,
+        .repr       = params->repr,
+        .color      = params->color,
+        .components = params->components,
+        .rect       = params->rect,
+    };
+}
+
+static struct pl_hook_res noop_hook(void *priv, const struct pl_hook_params *params)
+{
+    return (struct pl_hook_res) {0};
+}
+
 static void pl_render_tests(pl_gpu gpu)
 {
     pl_tex img_tex = NULL, fbo = NULL;
@@ -1404,6 +1452,39 @@ static void pl_render_tests(pl_gpu gpu)
             pl_mpv_user_shader_destroy(&hook);
         }
     }
+
+    // A hook shader that only fails once the renderer dispatches it (here,
+    // for the next hook's texture input) must only disable hooks
+    printf("- testing failing hook dispatch\n");
+    const struct pl_hook *hooks[] = {
+        &(struct pl_hook) {
+            .stages = PL_HOOK_RGB,
+            .input  = PL_HOOK_SIG_TEX,
+            .hook   = broken_hook,
+        },
+        &(struct pl_hook) {
+            .stages = PL_HOOK_RGB,
+            .input  = PL_HOOK_SIG_TEX,
+            .hook   = noop_hook,
+        },
+    };
+    params.hooks = hooks;
+    params.num_hooks = PL_ARRAY_SIZE(hooks);
+    pl_render_image(rr, &image, &target, &params);
+    struct pl_render_errors rr_err = pl_renderer_get_errors(rr);
+    REQUIRE(rr_err.errors & PL_RENDER_ERR_HOOKS);
+    pl_renderer_reset_errors(rr, &rr_err);
+
+    hooks[0] = &(struct pl_hook) {
+        .stages = PL_HOOK_RGB,
+        .input  = PL_HOOK_SIG_COLOR,
+        .hook   = broken_color_hook,
+        .priv   = (void *) img_plane.texture,
+    };
+    pl_render_image(rr, &image, &target, &params);
+    rr_err = pl_renderer_get_errors(rr);
+    REQUIRE(rr_err.errors & PL_RENDER_ERR_HOOKS);
+    pl_renderer_reset_errors(rr, &rr_err);
     params = pl_render_default_params;
 
     // Test custom LUTs
@@ -2115,11 +2196,6 @@ error:
     pl_renderer_destroy(&rr);
     pl_tex_destroy(gpu, &src_tex);
     pl_tex_destroy(gpu, &fbo);
-}
-
-static struct pl_hook_res noop_hook(void *priv, const struct pl_hook_params *params)
-{
-    return (struct pl_hook_res) {0};
 }
 
 static void pl_ycbcr_tests(pl_gpu gpu)

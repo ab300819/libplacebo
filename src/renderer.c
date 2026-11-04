@@ -572,8 +572,10 @@ static pl_tex _img_tex(struct pass_state *pass, struct img *img, pl_debug_tag ta
     if (!ok) {
         PL_ERR(rr, "%s", PL_DEF(err_msg, "Failed dispatching intermediate pass!"));
         rr->errors |= err_enum;
-        img->sh = pl_dispatch_begin(rr->dp);
+        // Exactly one of `sh` and `tex` must remain set
         img->tex = err_tex;
+        if (!img->tex)
+            img->sh = pl_dispatch_begin(rr->dp);
         return img->tex;
     }
 
