@@ -44,12 +44,13 @@ pl_metal pl_metal_create(pl_log log, const struct pl_metal_params *params)
 
     metal->device = device;
 
-    // Only Apple GPUs are supported: Intel and AMD GPUs cannot use shared
-    // storage for textures, which this backend relies on. Fail here so the
-    // caller can fall back to another API (e.g. Vulkan via MoltenVK).
-    if (!device->supportsFamily(MTL::GPUFamilyApple1)) {
-        PL_ERR(ctx, "Metal device '%s' is not an Apple GPU, which is required",
-               device->name()->utf8String());
+    // Only Apple7+ GPUs (A14, M1 and later) are supported: Intel and AMD GPUs
+    // cannot use shared storage for textures, and the advertised limits and
+    // format caps assume Apple7. Fail here so the caller can fall back to
+    // another API (e.g. Vulkan via MoltenVK).
+    if (!device->supportsFamily(MTL::GPUFamilyApple7)) {
+        PL_ERR(ctx, "Metal device '%s' is not an Apple7 or newer GPU, which "
+               "is required", device->name()->utf8String());
         goto error;
     }
 

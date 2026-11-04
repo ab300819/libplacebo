@@ -47,7 +47,7 @@ libplacebo currently supports Vulkan (including MoltenVK), OpenGL, Direct3D
 - **Vulkan**: Core version 1.2
 - **OpenGL**: GLSL version >= 130 (GL >= 3.0, GL ES >= 3.0)
 - **Direct3D**: Feature level >= 9_1
-- **Metal**: Apple GPU (Apple silicon Mac, macOS >= 12.0; iOS >= 15.0)
+- **Metal**: Apple7+ GPU (A14/M1 and later; macOS >= 12.0, iOS >= 15.0)
 
 For more documentation, including an introduction to the API, see [the project
 website](https://libplacebo.org).

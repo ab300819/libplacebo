@@ -21,8 +21,9 @@
 #include <libplacebo/gpu.h>
 #include <libplacebo/swapchain.h>
 
-// Only Apple GPUs are supported: pl_metal_create() fails on Intel and AMD
-// GPUs, in which case callers should fall back to another API such as Vulkan.
+// Only Apple7 or newer GPUs (A14, M1 and later) are supported:
+// pl_metal_create() fails on older Apple GPUs and on Intel and AMD GPUs, in
+// which case callers should fall back to another API such as Vulkan.
 // The backend requires a macOS 12.0 or iOS 15.0 deployment target; building
 // against an older target disables it at configure time.
 //
