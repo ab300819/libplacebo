@@ -139,6 +139,7 @@ void pl_metal_setup_formats(struct pl_gpu_t *gpu)
 {
     struct pl_gpu_metal *p = (struct pl_gpu_metal *) PL_PRIV(gpu);
     MTL::ReadWriteTextureTier rw_tier = p->device->readWriteTextureSupport();
+    bool float32_filter = p->device->supports32BitFloatFiltering();
     // One slot per table entry is enough; skipped formats leave theirs unused
     gpu->formats = pl_calloc_ptr(gpu, PL_ARRAY_SIZE(pl_metal_formats),
                                  gpu->formats);
@@ -168,7 +169,10 @@ void pl_metal_setup_formats(struct pl_gpu_t *gpu)
             fmt->caps = (enum pl_fmt_caps) 0;
         } else {
             fmt->caps = (enum pl_fmt_caps) (fmt->caps | PL_FMT_CAP_SAMPLEABLE);
-            if (fmt->type != PL_FMT_UINT && fmt->type != PL_FMT_SINT)
+            bool float32 = fmt->type == PL_FMT_FLOAT &&
+                           fmt->component_depth[0] == 32;
+            if (fmt->type != PL_FMT_UINT && fmt->type != PL_FMT_SINT &&
+                (!float32 || float32_filter))
                 fmt->caps = (enum pl_fmt_caps) (fmt->caps | PL_FMT_CAP_LINEAR);
 
             if (fmt->type == PL_FMT_UNORM || fmt->type == PL_FMT_SNORM ||
