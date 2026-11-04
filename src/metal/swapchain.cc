@@ -56,8 +56,9 @@ static void metal_sw_destroy(pl_swapchain sw)
 
 static int metal_sw_latency(pl_swapchain sw)
 {
-    (void) sw;
-    return 1;
+    // nextDrawable() only blocks once every drawable is in flight
+    struct priv *p = (struct priv *) PL_PRIV(sw);
+    return (int) p->layer->maximumDrawableCount();
 }
 
 static bool metal_sw_resize(pl_swapchain sw, int *width, int *height)
