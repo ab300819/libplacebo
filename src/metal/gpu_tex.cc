@@ -358,9 +358,14 @@ pl_tex pl_metal_wrap(pl_gpu gpu, const struct pl_metal_wrap_params *params)
         return NULL;
     }
 
+    MTL::Texture *mtex = (MTL::Texture *) params->texture;
+    if (mtex->sampleCount() != 1) {
+        PL_ERR(gpu, "Cannot wrap a multisampled Metal texture");
+        return NULL;
+    }
+
     // Only claim what both the format and the texture itself allow. Blits
     // may sample the source and render to the destination.
-    MTL::Texture *mtex = (MTL::Texture *) params->texture;
     enum pl_fmt_caps caps = params->format->caps;
     MTL::TextureUsage usage = mtex->usage();
     bool read = usage & MTL::TextureUsageShaderRead;

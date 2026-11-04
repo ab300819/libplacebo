@@ -948,6 +948,25 @@ static void metal_wrap_tests(pl_metal metal)
     REQUIRE(!tex->params.host_readable && !tex->params.host_writable);
     pl_tex_destroy(gpu, &tex);
     ((void (*)(id, SEL)) objc_msgSend)(mtex, sel_registerName("release"));
+
+    // pl_tex has no multisampling, so such textures must be rejected
+    printf("- rejecting a multisampled texture\n");
+    enum { MTL_TEX_2D_MS = 4, MTL_USAGE_RENDER_TARGET = 4 };
+    ((void (*)(id, SEL, unsigned long)) objc_msgSend)(
+        desc, sel_registerName("setTextureType:"), MTL_TEX_2D_MS);
+    ((void (*)(id, SEL, unsigned long)) objc_msgSend)(
+        desc, sel_registerName("setSampleCount:"), 4);
+    ((void (*)(id, SEL, unsigned long)) objc_msgSend)(
+        desc, sel_registerName("setUsage:"), MTL_USAGE_RENDER_TARGET);
+    mtex = ((id (*)(id, SEL, id)) objc_msgSend)(
+        (id) metal->device, sel_registerName("newTextureWithDescriptor:"), desc);
+    REQUIRE(mtex);
+    tex = pl_metal_wrap(gpu, pl_metal_wrap_params(
+        .texture = (void *) mtex, .w = 4, .h = 4,
+        .format = pl_find_named_fmt(gpu, "rgba8"),
+    ));
+    REQUIRE(!tex);
+    ((void (*)(id, SEL)) objc_msgSend)(mtex, sel_registerName("release"));
 }
 
 // A timer reports each timed pass once, after the GPU has finished it
