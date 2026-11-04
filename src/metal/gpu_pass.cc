@@ -128,6 +128,7 @@ static bool compile_glsl_to_msl(pl_gpu gpu, enum glsl_shader_stage stage,
                         memcpy(out->wg_size, cached_msl.data, wg_bytes);
                         // pl_cache_get() hands over ownership; put it back
                         pl_cache_set(gpu_cache, &cached_msl);
+                        pl_free(tmp);
                         return true;
                     }
                     lib->release();
