@@ -32,7 +32,7 @@ if cc.has_argument('-Wc23-extensions')
 endif
 
 static_library('test_include', test_include_sources,
-    dependencies: [tdep_static, lavu, lavc, lavf],
+    dependencies: [tdep_static, lavu, lavc, lavf, dav1d],
     include_directories: [inc],
     implicit_include_directories: false,
     c_args: test_opts,
