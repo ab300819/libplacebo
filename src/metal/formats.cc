@@ -105,9 +105,40 @@ const struct mtl_format pl_metal_formats[] = {
 #undef BITS
 #undef IDX
 
+// Formats Metal guarantees `access::read_write` for, per readWriteTextureSupport
+static bool fmt_is_readwrite(MTL::PixelFormat fmt, MTL::ReadWriteTextureTier tier)
+{
+    switch (fmt) {
+    case MTL::PixelFormatR32Float:
+    case MTL::PixelFormatR32Uint:
+    case MTL::PixelFormatR32Sint:
+        return tier >= MTL::ReadWriteTextureTier1;
+    case MTL::PixelFormatRGBA32Float:
+    case MTL::PixelFormatRGBA32Uint:
+    case MTL::PixelFormatRGBA32Sint:
+    case MTL::PixelFormatRGBA16Float:
+    case MTL::PixelFormatRGBA16Uint:
+    case MTL::PixelFormatRGBA16Sint:
+    case MTL::PixelFormatRGBA8Unorm:
+    case MTL::PixelFormatRGBA8Uint:
+    case MTL::PixelFormatRGBA8Sint:
+    case MTL::PixelFormatR16Float:
+    case MTL::PixelFormatR16Uint:
+    case MTL::PixelFormatR16Sint:
+    case MTL::PixelFormatR8Unorm:
+    case MTL::PixelFormatR8Uint:
+    case MTL::PixelFormatR8Sint:
+        return tier >= MTL::ReadWriteTextureTier2;
+    default:
+        return false;
+    }
+}
+
 extern "C"
 void pl_metal_setup_formats(struct pl_gpu_t *gpu)
 {
+    struct pl_gpu_metal *p = (struct pl_gpu_metal *) PL_PRIV(gpu);
+    MTL::ReadWriteTextureTier rw_tier = p->device->readWriteTextureSupport();
     // One slot per table entry is enough; skipped formats leave theirs unused
     gpu->formats = pl_calloc_ptr(gpu, PL_ARRAY_SIZE(pl_metal_formats),
                                  gpu->formats);
@@ -150,7 +181,8 @@ void pl_metal_setup_formats(struct pl_gpu_t *gpu)
 
             if (has_compute) {
                 fmt->caps = (enum pl_fmt_caps) (fmt->caps | PL_FMT_CAP_STORABLE);
-                fmt->caps = (enum pl_fmt_caps) (fmt->caps | PL_FMT_CAP_READWRITE);
+                if (fmt_is_readwrite((MTL::PixelFormat) mtl_fmt->mtlfmt, rw_tier))
+                    fmt->caps = (enum pl_fmt_caps) (fmt->caps | PL_FMT_CAP_READWRITE);
             }
 
             if ((fmt->caps & PL_FMT_CAP_SAMPLEABLE) &&
