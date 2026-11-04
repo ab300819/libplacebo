@@ -108,19 +108,12 @@ const struct mtl_format pl_metal_formats[] = {
 extern "C"
 void pl_metal_setup_formats(struct pl_gpu_t *gpu)
 {
-    struct pl_gpu_metal *p = (struct pl_gpu_metal *) PL_PRIV(gpu);
-    MTL::Device *device = p->device;
     // One slot per table entry is enough; skipped formats leave theirs unused
     gpu->formats = pl_calloc_ptr(gpu, PL_ARRAY_SIZE(pl_metal_formats),
                                  gpu->formats);
     gpu->num_formats = 0;
 
     bool has_compute = gpu->glsl.compute;
-    bool family_common3 = device->supportsFamily(MTL::GPUFamilyCommon3);
-    bool family_mac2 = device->supportsFamily(MTL::GPUFamilyMac2);
-    bool family_apple7 = device->supportsFamily(MTL::GPUFamilyApple7);
-    bool family_metal3 = device->supportsFamily(MTL::GPUFamilyMetal3);
-    bool modern = family_common3 || family_mac2 || family_apple7 || family_metal3;
 
     for (int i = 0; pl_metal_formats[i].fmt.name; i++) {
         const struct mtl_format *mtl_fmt = &pl_metal_formats[i];
@@ -155,7 +148,7 @@ void pl_metal_setup_formats(struct pl_gpu_t *gpu)
                 fmt->caps = (enum pl_fmt_caps) (fmt->caps | PL_FMT_CAP_BLENDABLE);
             }
 
-            if (has_compute && modern) {
+            if (has_compute) {
                 fmt->caps = (enum pl_fmt_caps) (fmt->caps | PL_FMT_CAP_STORABLE);
                 fmt->caps = (enum pl_fmt_caps) (fmt->caps | PL_FMT_CAP_READWRITE);
             }
