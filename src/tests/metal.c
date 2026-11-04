@@ -555,6 +555,18 @@ static void metal_swapchain_tests(pl_metal metal)
     pl_swapchain_colorspace_hint(sw, &pl_color_space_srgb);
     REQUIRE(pl_swapchain_start_frame(sw, &hf));
     REQUIRE_CMP(hf.fbo->params.format->component_depth[0], ==, 8, "d");
+    REQUIRE(pl_swapchain_submit_frame(sw));
+    pl_swapchain_swap_buffers(sw);
+
+    // scRGB needs a float layer in extended linear sRGB
+    pl_swapchain_colorspace_hint(sw, &(struct pl_color_space) {
+        .primaries = PL_COLOR_PRIM_BT_709,
+        .transfer = PL_COLOR_TRC_SCRGB,
+    });
+    REQUIRE(pl_swapchain_start_frame(sw, &hf));
+    REQUIRE_CMP(hf.color_space.transfer, ==, PL_COLOR_TRC_SCRGB, "d");
+    REQUIRE_CMP(hf.fbo->params.format->type, ==, PL_FMT_FLOAT, "d");
+    pl_tex_clear(gpu, hf.fbo, (float[4]) {0});
     // A caller pool opened mid-frame must survive submit_frame
     void *caller_pool = objc_autoreleasePoolPush();
     REQUIRE(pl_swapchain_submit_frame(sw));
