@@ -30,18 +30,14 @@ static MTL::Region mtl_region(pl_rect3d rc)
 }
 
 // replaceRegion takes the caller's row and slice pitch as is. 1D textures are
-// created as 2D (height=1) to match MSL_TEXTURE_1D_AS_2D shader code.
-static bool upload_to_metal(pl_gpu gpu, pl_tex tex, pl_rect3d rc,
-                            const void *src, size_t row_pitch, size_t depth_pitch)
+// created as 2D (height=1) to match MSL_TEXTURE_1D_AS_2D shader code. It
+// writes immediately, so the texture must not be in use by the GPU.
+static bool upload_to_metal(pl_tex tex, pl_rect3d rc, const void *src,
+                            size_t row_pitch, size_t depth_pitch)
 {
-    struct pl_gpu_metal *p = (struct pl_gpu_metal *) PL_PRIV(gpu);
     struct pl_tex_metal *tex_p = (struct pl_tex_metal *) PL_PRIV(tex);
     if (!tex_p->tex)
         return false;
-
-    // replaceRegion writes immediately, so wait out queued GPU use first.
-    // TODO: upload through a staging buffer and blit, to avoid the stall
-    metal_wait_gen(p, tex_p->last_gen, UINT64_MAX);
 
     if (pl_tex_params_dimension(tex->params) <= 2) {
         tex_p->tex->replaceRegion(mtl_region(rc), 0, src, row_pitch);
@@ -196,7 +192,7 @@ pl_tex pl_metal_tex_create(pl_gpu gpu, const struct pl_tex_params *params)
     if (params->initial_data) {
         pl_rect3d rc = { 0, 0, 0, params->w, PL_DEF(params->h, 1), PL_DEF(params->d, 1) };
         size_t row_pitch = (size_t) params->w * params->format->texel_size;
-        if (!upload_to_metal(gpu, tex, rc, params->initial_data, row_pitch,
+        if (!upload_to_metal(tex, rc, params->initial_data, row_pitch,
                              row_pitch * PL_DEF(params->h, 1)))
             goto error;
     }
@@ -224,20 +220,39 @@ void pl_metal_tex_destroy(pl_gpu gpu, pl_tex tex)
 
 bool pl_metal_tex_upload(pl_gpu gpu, const struct pl_tex_transfer_params *params)
 {
-    const uint8_t *src = (const uint8_t *) params->ptr;
-    if (params->buf) {
-        struct pl_buf_metal *buf_p = (struct pl_buf_metal *) PL_PRIV(params->buf);
-        metal_wait_gen((struct pl_gpu_metal *) PL_PRIV(gpu), buf_p->last_gen, UINT64_MAX);
-        void *ptr = buf_p->buf ? buf_p->buf->contents() : NULL;
-        if (!ptr) {
-            PL_ERR(gpu, "Failed mapping Metal upload buffer");
-            return false;
-        }
-        src = (const uint8_t *) ptr + params->buf_offset;
+    struct pl_gpu_metal *p = (struct pl_gpu_metal *) PL_PRIV(gpu);
+    pl_tex tex = params->tex;
+    struct pl_tex_metal *tex_p = (struct pl_tex_metal *) PL_PRIV(tex);
+
+    if (!params->buf) {
+        // replaceRegion would have to wait for the GPU, so stage instead
+        if (!metal_gen_completed(p, tex_p->last_gen))
+            return pl_tex_upload_pbo(gpu, params);
+        return upload_to_metal(tex, params->rc, params->ptr,
+                               params->row_pitch, params->depth_pitch);
     }
 
-    return upload_to_metal(gpu, params->tex, params->rc,
-                           src, params->row_pitch, params->depth_pitch);
+    struct pl_buf_metal *buf_p = (struct pl_buf_metal *) PL_PRIV(params->buf);
+    metal_autorelease pool;
+    if (!tex_p->tex || !buf_p->buf || !p->pending_cb)
+        return false;
+    MTL::BlitCommandEncoder *blit = p->pending_cb->blitCommandEncoder();
+    if (!blit)
+        return false;
+
+    pl_rect3d rc = params->rc;
+    blit->copyFromBuffer(
+        buf_p->buf, (NS::UInteger) params->buf_offset,
+        (NS::UInteger) params->row_pitch, (NS::UInteger) params->depth_pitch,
+        MTL::Size((NS::UInteger) pl_rect_w(rc), (NS::UInteger) pl_rect_h(rc),
+                  (NS::UInteger) pl_rect_d(rc)),
+        tex_p->tex, 0, 0,
+        MTL::Origin((NS::UInteger) rc.x0, (NS::UInteger) rc.y0,
+                    (NS::UInteger) rc.z0));
+    blit->endEncoding();
+    metal_stamp_buf(p, params->buf);
+    metal_stamp_tex(p, tex);
+    return true;
 }
 
 bool pl_metal_tex_download(pl_gpu gpu, const struct pl_tex_transfer_params *params)

@@ -911,6 +911,39 @@ static void metal_transfer_tests(pl_gpu gpu)
     }
     pl_tex_destroy(gpu, &tex);
 
+    // The same through a buffer at an offset. Overwriting the buffer right
+    // after must not change what was uploaded from it.
+    printf("- partial 3D upload from a buffer\n");
+    enum { OFFSET = 16 };
+    pl_buf buf = pl_buf_create(gpu, pl_buf_params(
+        .size = OFFSET + sizeof(data), .host_writable = true));
+    REQUIRE(buf);
+    pl_buf_write(gpu, buf, OFFSET, data, sizeof(data));
+    tex = pl_tex_create(gpu, pl_tex_params(
+        .w = W, .h = H, .d = D, .format = fmt,
+        .host_writable = true, .host_readable = true,
+        .initial_data = (uint8_t[D * H * W * 4]) {0},
+    ));
+    REQUIRE(tex);
+    REQUIRE(pl_tex_upload(gpu, pl_tex_transfer_params(
+        .tex = tex, .buf = buf, .buf_offset = OFFSET,
+        .rc = { 0, 0, 0, W, H / 2, D },
+        .row_pitch = sizeof(data[0][0]),
+        .depth_pitch = sizeof(data[0]),
+    )));
+    pl_buf_write(gpu, buf, OFFSET, (uint8_t[sizeof(data)]) {0}, sizeof(data));
+    REQUIRE(pl_tex_download(gpu, pl_tex_transfer_params(.tex = tex, .ptr = out)));
+    for (int z = 0; z < D; z++) {
+        for (int y = 0; y < H; y++) {
+            if (y < H / 2)
+                REQUIRE_MEMEQ(out[z][y], data[z][y], sizeof(data[z][y]));
+            else
+                REQUIRE_MEMEQ(out[z][y], ((uint8_t[W][4]) {0}), sizeof(out[z][y]));
+        }
+    }
+    pl_tex_destroy(gpu, &tex);
+    pl_buf_destroy(gpu, &buf);
+
     // A non-zero clear of a packed format must not depend on host access
     printf("- packed format clear\n");
     pl_fmt packed = pl_find_named_fmt(gpu, "rgb10a2");
