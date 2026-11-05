@@ -551,9 +551,15 @@ static pl_tex _img_tex(struct pass_state *pass, struct img *img, pl_debug_tag ta
     if (!tex) {
         PL_ERR(rr, "Failed creating FBO texture! Disabling advanced rendering..");
         memset(pass->fbofmt, 0, sizeof(pass->fbofmt));
-        pl_dispatch_abort(rr->dp, &img->sh);
         rr->errors |= PL_RENDER_ERR_FBO;
-        return img->err_tex;
+        if (!img->err_tex)
+            return NULL; // keep `img->sh`, so the caller can carry on without the FBO
+        pl_dispatch_abort(rr->dp, &img->sh);
+        img->tex = img->err_tex;
+        img->err_msg = NULL;
+        img->err_enum = PL_RENDER_ERR_NONE;
+        img->err_tex = NULL;
+        return img->tex;
     }
 
     pl_assert(img->sh);
@@ -804,6 +810,7 @@ static void dispatch_sampler(struct pass_state *pass, pl_shader sh,
         };
 
         src2.tex = img_tex(pass, &img);
+        pl_dispatch_abort(rr->dp, &img.sh); // left over on failure
         src2.scale = 1.0;
         ok = src2.tex && pl_shader_sample_ortho2(sh, &src2, &fparams);
     } else {
@@ -1876,6 +1883,7 @@ static bool pass_read_image(struct pass_state *pass)
             PL_ERR(rr, "Failed dispatching plane merging shader, disabling FBOs!");
             memset(pass->fbofmt, 0, sizeof(pass->fbofmt));
             rr->errors |= PL_RENDER_ERR_FBO;
+            pl_dispatch_abort(rr->dp, &sti->img.sh);
             return false;
         }
     }
@@ -2061,6 +2069,7 @@ static bool pass_read_image(struct pass_state *pass)
         ident_t sub = sh_subpass(sh, img_sh(pass, &st->img));
         if (!sub) {
             if (!img_tex(pass, &st->img)) {
+                pl_dispatch_abort(rr->dp, &st->img.sh);
                 pl_dispatch_abort(rr->dp, &sh);
                 return false;
             }
@@ -2473,8 +2482,9 @@ static void pass_convert_colors(struct pass_state *pass)
         if (target->icc || linear_xyz)
             target_csp.transfer = PL_COLOR_TRC_LINEAR;
 
-        if (pass->need_peak_fbo && !img_tex(pass, img))
-            return;
+        // Without an FBO, the peak is detected with a frame of delay instead
+        if (pass->need_peak_fbo)
+            img_tex(pass, img);
 
         // generate HDR feature map if required
         pl_tex feature_map = get_feature_map(pass);
