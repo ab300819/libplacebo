@@ -351,6 +351,18 @@ static void sdl_poll(struct window *window, bool block)
 static void sdl_get_cursor(const struct window *window, int *x, int *y)
 {
     SDL_GetMouseState(x, y);
+#ifdef USE_MTL
+    // The cursor is in points, but the UI is drawn in drawable pixels, which
+    // differ on a HiDPI display.
+    struct priv *p = (struct priv *) window;
+    int win_w, win_h, px_w, px_h;
+    SDL_GetWindowSize(p->win, &win_w, &win_h);
+    SDL_Metal_GetDrawableSize(p->win, &px_w, &px_h);
+    if (win_w > 0 && win_h > 0) {
+        *x = *x * px_w / win_w;
+        *y = *y * px_h / win_h;
+    }
+#endif
 }
 
 static bool sdl_get_button(const struct window *window, enum button btn)
