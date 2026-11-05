@@ -1400,9 +1400,13 @@ static bool plane_deband(struct pass_state *pass, struct img *img, float neutral
         return false;
     }
 
+    pl_tex tex = img_tex(pass, img);
+    if (!tex)
+        return false;
+
     struct pl_color_repr repr = img->repr;
     struct pl_sample_src src = {
-        .tex = img_tex(pass, img),
+        .tex = tex,
         .components = img->comps,
         .scale = pl_color_repr_normalize(&repr),
     };
@@ -2054,6 +2058,11 @@ static bool pass_read_image(struct pass_state *pass)
             // Image rects are already equal, no indirect scaling needed
         } else {
             src.tex = img_tex(pass, &st->img);
+            if (!src.tex) {
+                pl_dispatch_abort(rr->dp, &st->img.sh);
+                pl_dispatch_abort(rr->dp, &sh);
+                return false;
+            }
             st->img.tex = NULL;
             st->img.sh = pl_dispatch_begin_ex(rr->dp, true);
             dispatch_sampler(pass, st->img.sh, &rr->samplers_src[i],

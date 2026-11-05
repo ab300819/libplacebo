@@ -1485,6 +1485,20 @@ static void pl_render_tests(pl_gpu gpu)
     rr_err = pl_renderer_get_errors(rr);
     REQUIRE(rr_err.errors & PL_RENDER_ERR_HOOKS);
     pl_renderer_reset_errors(rr, &rr_err);
+
+    // Same, on a plane that still needs to be aligned to the cropped image
+    hooks[0] = &(struct pl_hook) {
+        .stages = PL_HOOK_LUMA_INPUT,
+        .input  = PL_HOOK_SIG_COLOR,
+        .hook   = broken_color_hook,
+        .priv   = (void *) img_plane.texture,
+    };
+    image.crop = (pl_rect2df) { 0.5f, 0.5f, width - 0.5f, height - 0.5f };
+    pl_render_image(rr, &image, &target, &params);
+    image.crop = (pl_rect2df) {0};
+    rr_err = pl_renderer_get_errors(rr);
+    REQUIRE(rr_err.errors & PL_RENDER_ERR_HOOKS);
+    pl_renderer_reset_errors(rr, &rr_err);
     params = pl_render_default_params;
 
     // Test custom LUTs
