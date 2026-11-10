@@ -113,8 +113,14 @@ static CGColorSpaceRef csp_to_cgcolorspace(struct pl_color_space *csp)
     }
 
     csp->primaries = PL_COLOR_PRIM_BT_709;
-    if (csp->transfer == PL_COLOR_TRC_SCRGB)
+    if (csp->transfer == PL_COLOR_TRC_SCRGB) {
+        // EDR puts SDR white at 1.0, which is libplacebo's linear scale, not
+        // scRGB's 80 cd/m^2 (that would come out 203/80 times too bright)
+        csp->transfer = PL_COLOR_TRC_LINEAR;
+        if (!csp->hdr.max_luma)
+            csp->hdr.max_luma = 10000; // scRGB's nominal peak, keep it HDR
         return CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+    }
     if (csp->transfer == PL_COLOR_TRC_LINEAR)
         return CGColorSpaceCreateWithName(kCGColorSpaceLinearSRGB);
 
@@ -129,16 +135,17 @@ static void metal_sw_colorspace_hint(pl_swapchain sw, const struct pl_color_spac
     CGColorSpaceRef cs = csp_to_cgcolorspace(&applied);
     p->current_csp = applied;
 
+    bool edr_linear = csp->transfer == PL_COLOR_TRC_SCRGB &&
+                      applied.transfer == PL_COLOR_TRC_LINEAR;
     bool needs_edr = applied.transfer == PL_COLOR_TRC_PQ ||
                      applied.transfer == PL_COLOR_TRC_HLG ||
-                     applied.transfer == PL_COLOR_TRC_SCRGB;
+                     edr_linear;
 
     // 8 bits band visibly with PQ/HLG or linear light; keep a format the
     // caller chose themselves
     if (p->auto_fmt) {
         MTL::PixelFormat pf = MTL::PixelFormatBGRA8Unorm;
-        if (applied.transfer == PL_COLOR_TRC_LINEAR ||
-            applied.transfer == PL_COLOR_TRC_SCRGB)
+        if (applied.transfer == PL_COLOR_TRC_LINEAR)
             pf = MTL::PixelFormatRGBA16Float;
         else if (needs_edr)
             pf = MTL::PixelFormatRGB10A2Unorm;

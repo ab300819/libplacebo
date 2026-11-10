@@ -20,6 +20,7 @@
 #include "shaders.h"
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CGColor.h>
 #include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGGeometry.h>
 #include <IOKit/IOReturn.h>
@@ -559,13 +560,14 @@ static void metal_swapchain_tests(pl_metal metal)
     REQUIRE(pl_swapchain_submit_frame(sw));
     pl_swapchain_swap_buffers(sw);
 
-    // scRGB needs a float layer in extended linear sRGB
+    // scRGB needs a float layer in extended linear sRGB, whose 1.0 is SDR
+    // white, so the frame must be plain linear light rather than scRGB
     pl_swapchain_colorspace_hint(sw, &(struct pl_color_space) {
         .primaries = PL_COLOR_PRIM_BT_709,
         .transfer = PL_COLOR_TRC_SCRGB,
     });
     REQUIRE(pl_swapchain_start_frame(sw, &hf));
-    REQUIRE_CMP(hf.color_space.transfer, ==, PL_COLOR_TRC_SCRGB, "d");
+    REQUIRE_CMP(hf.color_space.transfer, ==, PL_COLOR_TRC_LINEAR, "d");
     REQUIRE_CMP(hf.fbo->params.format->type, ==, PL_FMT_FLOAT, "d");
     pl_tex_clear(gpu, hf.fbo, (float[4]) {0});
     // A caller pool opened mid-frame must survive submit_frame
@@ -881,12 +883,11 @@ struct hdr_kat_result {
 };
 
 // Render one patch set (a single row) into the top left of `fbo` with the
-// colorimetry of `dst`, then compare every pixel against the reference
-static void hdr_kat_run(pl_gpu gpu, pl_renderer rr, pl_tex fbo,
-                        const struct pl_color_space *dst,
-                        enum pl_color_primaries src_prim,
-                        const double (*patches)[3], int num,
-                        struct hdr_kat_result *res)
+// colorimetry of `dst`
+static void hdr_kat_render(pl_gpu gpu, pl_renderer rr, pl_tex fbo,
+                           const struct pl_color_space *dst,
+                           enum pl_color_primaries src_prim,
+                           const double (*patches)[3], int num)
 {
     REQUIRE_CMP(num, <=, HDR_KAT_MAX_PATCHES, "d");
     pl_fmt src_fmt = pl_find_fmt(gpu, PL_FMT_FLOAT, 4, 32, 32, PL_FMT_CAP_SAMPLEABLE);
@@ -930,7 +931,17 @@ static void hdr_kat_run(pl_gpu gpu, pl_renderer rr, pl_tex fbo,
     params.dither_params = NULL;
     params.peak_detect_params = NULL;
     REQUIRE(pl_render_image(rr, &image, &target, &params));
+    pl_tex_destroy(gpu, &src);
+}
 
+// Render a patch set as above, then compare every pixel against the reference
+static void hdr_kat_run(pl_gpu gpu, pl_renderer rr, pl_tex fbo,
+                        const struct pl_color_space *dst,
+                        enum pl_color_primaries src_prim,
+                        const double (*patches)[3], int num,
+                        struct hdr_kat_result *res)
+{
+    hdr_kat_render(gpu, rr, fbo, dst, src_prim, patches, num);
     uint32_t *out = malloc((size_t) fbo->params.w * fbo->params.h * sizeof(uint32_t));
     REQUIRE(out);
     REQUIRE(read_back_fbo(gpu, fbo, (uint8_t *) out));
@@ -982,7 +993,6 @@ static void hdr_kat_run(pl_gpu gpu, pl_renderer rr, pl_tex fbo,
     }
 
     free(out);
-    pl_tex_destroy(gpu, &src);
 }
 
 // Gates: within one 10-bit code value, and below one JND everywhere
@@ -1091,6 +1101,72 @@ static void metal_swapchain_hdr_tests(pl_metal metal)
         pl_swapchain_swap_buffers(sw);
         REQUIRE(!pl_gpu_is_failed(gpu));
     }
+
+    // scRGB lands in an extended linear sRGB layer. What a value there means
+    // is up to Apple, so take the reference from CoreGraphics itself: the
+    // ST 2084 encoding of each patch, matched into the layer's colorspace.
+    static const double scrgb_patches[][3] = {
+        {    0,    0,    0 }, {    1,    1,    1 }, {  100,  100,  100 },
+        {  203,  203,  203 }, { 1000, 1000, 1000 }, {  203,    0,    0 },
+        {    0,  203,    0 }, {    0,    0,  203 }, {   50,   30,   10 },
+    };
+    const int num = PL_ARRAY_SIZE(scrgb_patches);
+
+    pl_swapchain_colorspace_hint(sw, &(struct pl_color_space) {
+        .primaries = PL_COLOR_PRIM_BT_709,
+        .transfer = PL_COLOR_TRC_SCRGB,
+    });
+    struct pl_swapchain_frame f = {0};
+    REQUIRE(pl_swapchain_start_frame(sw, &f));
+    pl_fmt ffmt = f.fbo->params.format;
+    REQUIRE(ffmt->type == PL_FMT_FLOAT && ffmt->component_depth[0] == 16);
+    REQUIRE(ffmt->texel_size == 8 && (ffmt->caps & PL_FMT_CAP_HOST_READABLE));
+    hdr_kat_render(gpu, rr, f.fbo, &f.color_space, PL_COLOR_PRIM_BT_709,
+                   scrgb_patches, num);
+
+    __fp16 *out = malloc((size_t) f.fbo->params.w * f.fbo->params.h * 8);
+    REQUIRE(out);
+    REQUIRE(read_back_fbo(gpu, f.fbo, (uint8_t *) out));
+
+    CGColorSpaceRef pq_cs = CGColorSpaceCreateWithName(kCGColorSpaceITUR_2100_PQ);
+    CGColorSpaceRef ext_cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
+    REQUIRE(pq_cs && ext_cs);
+    double max_err = 0;
+    for (int i = 0; i < num; i++) {
+        double rgb2020[3];
+        ref_bt709_to_bt2020(scrgb_patches[i], rgb2020);
+        CGFloat comps[4] = { 0, 0, 0, 1 };
+        for (int c = 0; c < 3; c++)
+            comps[c] = ref_pq_encode(rgb2020[c]);
+        CGColorRef pq_col = CGColorCreate(pq_cs, comps);
+        CGColorRef ext_col = CGColorCreateCopyByMatchingToColorSpace(
+            ext_cs, kCGRenderingIntentDefault, pq_col, NULL);
+        REQUIRE(ext_col);
+        const CGFloat *want = CGColorGetComponents(ext_col);
+        for (int c = 0; c < 3; c++) {
+            double got = out[i * 4 + c];
+            // fp16 keeps 11 significant bits, and BT.2087 rounds to 4 digits,
+            // which leaves about 1e-4 of crosstalk around zero
+            double tol = 2e-3 * fabs(want[c]) + 1e-4;
+            double err = fabs(got - want[c]);
+            max_err = fmax(max_err, err / tol);
+            if (err > tol) {
+                printf("  patch %d channel %d: got %f, CoreGraphics says %f\n",
+                       i, c, got, (double) want[c]);
+            }
+        }
+        CGColorRelease(ext_col);
+        CGColorRelease(pq_col);
+    }
+    printf("  %-24s max error %.2f of tolerance\n", "drawable, scRGB", max_err);
+    REQUIRE_CMP(max_err, <=, 1.0, "f");
+    CGColorSpaceRelease(ext_cs);
+    CGColorSpaceRelease(pq_cs);
+    free(out);
+
+    REQUIRE(pl_swapchain_submit_frame(sw));
+    pl_swapchain_swap_buffers(sw);
+    REQUIRE(!pl_gpu_is_failed(gpu));
 
     pl_renderer_destroy(&rr);
     pl_swapchain_destroy(&sw);
