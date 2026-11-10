@@ -748,6 +748,312 @@ static void metal_swapchain_layer_tests(pl_metal metal)
     ((void (*)(id, SEL)) objc_msgSend)(layer, sel_registerName("release"));
 }
 
+// Reference HDR encodings, in double precision and straight from the
+// standards, so that they share nothing with the GLSL under test
+
+// SMPTE ST 2084, cd/m^2 <-> signal
+static const double PQ_M1 = 2610.0 / 16384, PQ_M2 = 2523.0 / 4096 * 128,
+                    PQ_C1 = 3424.0 / 4096, PQ_C2 = 2413.0 / 4096 * 32,
+                    PQ_C3 = 2392.0 / 4096 * 32;
+
+static double ref_pq_encode(double nits)
+{
+    double y = pow(fmax(nits, 0) / 10000, PQ_M1);
+    return pow((PQ_C1 + PQ_C2 * y) / (1 + PQ_C3 * y), PQ_M2);
+}
+
+static double ref_pq_decode(double v)
+{
+    double p = pow(v, 1 / PQ_M2);
+    return 10000 * pow(fmax(p - PQ_C1, 0) / (PQ_C2 - PQ_C3 * p), 1 / PQ_M1);
+}
+
+// ITU-R BT.2100 HLG, for a display with peak `lw` and black `lb` (cd/m^2)
+static const double HLG_REF_A = 0.17883277, HLG_REF_B = 1 - 4 * 0.17883277;
+#define HLG_REF_C (0.5 - HLG_REF_A * log(4 * HLG_REF_A))
+
+static double ref_hlg_gamma(double lw)
+{
+    return 1.2 * pow(1.111, log2(lw / 1000)); // table 5, note 5f
+}
+
+static double ref_hlg_beta(double lw, double lb)
+{
+    return sqrt(3 * pow(lb / lw, 1 / ref_hlg_gamma(lw)));
+}
+
+static double ref_bt2020_luma(const double rgb[3])
+{
+    return 0.2627 * rgb[0] + 0.6780 * rgb[1] + 0.0593 * rgb[2];
+}
+
+// Display light -> signal: inverse OOTF, OETF, then undo the black lift
+static void ref_hlg_encode(const double nits[3], double lw, double lb, double out[3])
+{
+    double g = ref_hlg_gamma(lw), beta = ref_hlg_beta(lw, lb);
+    double yd = ref_bt2020_luma(nits);
+    for (int c = 0; c < 3; c++) {
+        double e = yd > 0 ? nits[c] / lw * pow(yd / lw, (1 - g) / g) : 0;
+        double v = e <= 1.0 / 12 ? sqrt(3 * e)
+                                 : HLG_REF_A * log(12 * e - HLG_REF_B) + HLG_REF_C;
+        out[c] = (v - beta) / (1 - beta);
+    }
+}
+
+// Signal -> display light, the BT.2100 HLG EOTF
+static void ref_hlg_decode(const double sig[3], double lw, double lb, double out[3])
+{
+    double g = ref_hlg_gamma(lw), beta = ref_hlg_beta(lw, lb), e[3];
+    for (int c = 0; c < 3; c++) {
+        double v = fmax(0, (1 - beta) * sig[c] + beta);
+        e[c] = v <= 0.5 ? v * v / 3 : (exp((v - HLG_REF_C) / HLG_REF_A) + HLG_REF_B) / 12;
+    }
+    double ys = ref_bt2020_luma(e);
+    for (int c = 0; c < 3; c++)
+        out[c] = ys > 0 ? lw * pow(ys, g - 1) * e[c] : 0;
+}
+
+// ITU-R BT.2124 ΔE ITP between two BT.2020 colours in display light (cd/m^2).
+// 1.0 is about one just noticeable difference.
+static double ref_delta_e_itp(const double a[3], const double b[3])
+{
+    double itp[2][3];
+    const double *rgb[2] = { a, b };
+    for (int i = 0; i < 2; i++) {
+        const double *x = rgb[i];
+        double lms[3] = { // BT.2100 table 7
+            ref_pq_encode((1688 * x[0] + 2146 * x[1] +  262 * x[2]) / 4096),
+            ref_pq_encode(( 683 * x[0] + 2951 * x[1] +  462 * x[2]) / 4096),
+            ref_pq_encode((  99 * x[0] +  309 * x[1] + 3688 * x[2]) / 4096),
+        };
+        itp[i][0] = 0.5 * lms[0] + 0.5 * lms[1];
+        itp[i][1] = 0.5 * (6610 * lms[0] - 13613 * lms[1] + 7003 * lms[2]) / 4096;
+        itp[i][2] = (17933 * lms[0] - 17390 * lms[1] - 543 * lms[2]) / 4096;
+    }
+    double di = itp[0][0] - itp[1][0], dt = itp[0][1] - itp[1][1],
+           dp = itp[0][2] - itp[1][2];
+    return 720 * sqrt(di * di + dt * dt + dp * dp);
+}
+
+// BT.709 -> BT.2020 for linear light, ITU-R BT.2087 equation 4
+static void ref_bt709_to_bt2020(const double in[3], double out[3])
+{
+    static const double m[3][3] = {
+        { 0.6274, 0.3293, 0.0433 },
+        { 0.0691, 0.9195, 0.0114 },
+        { 0.0164, 0.0880, 0.8956 },
+    };
+    for (int r = 0; r < 3; r++)
+        out[r] = m[r][0] * in[0] + m[r][1] * in[1] + m[r][2] * in[2];
+}
+
+// Test patches in linear light (cd/m^2), each set in its own primaries
+static const double hdr_patches_2020[][3] = {
+    {    0,    0,    0 }, {  0.1,  0.1,  0.1 }, {    1,    1,    1 },
+    {   10,   10,   10 }, {  100,  100,  100 }, {  203,  203,  203 },
+    {  500,  500,  500 }, { 1000, 1000, 1000 },
+    // Saturated colours stay at 500 cd/m^2: brighter than that, HLG's
+    // luminance-based OOTF pushes pure blue out of the signal range
+    {  500,    0,    0 }, {    0,  500,    0 }, {    0,    0,  500 },
+    {    0,  500,  500 }, {  500,    0,  500 }, {  500,  500,    0 },
+    {  100,   20,    5 }, {   20,  100,   50 },
+};
+
+static const double hdr_patches_709[][3] = {
+    { 203,   0,   0 }, {   0, 203,   0 }, {   0,   0, 203 },
+    { 203, 203,   0 }, {   0, 203, 203 }, { 203,   0, 203 },
+    { 203, 203, 203 }, {  50,  30,  10 },
+};
+
+#define HDR_KAT_MAX_PATCHES 16
+#define HDR_KAT_LW 1000.0
+
+// Unpack one pixel of an RGB10A2Unorm texture: R in the low bits
+static void unpack_rgb10a2(uint32_t px, int out[3])
+{
+    for (int c = 0; c < 3; c++)
+        out[c] = (px >> (10 * c)) & 0x3FF;
+}
+
+struct hdr_kat_result {
+    int max_code_diff;
+    double max_delta_e;
+};
+
+// Render one patch set (a single row) into the top left of `fbo` with the
+// colorimetry of `dst`, then compare every pixel against the reference
+static void hdr_kat_run(pl_gpu gpu, pl_renderer rr, pl_tex fbo,
+                        const struct pl_color_space *dst,
+                        enum pl_color_primaries src_prim,
+                        const double (*patches)[3], int num,
+                        struct hdr_kat_result *res)
+{
+    REQUIRE_CMP(num, <=, HDR_KAT_MAX_PATCHES, "d");
+    pl_fmt src_fmt = pl_find_fmt(gpu, PL_FMT_FLOAT, 4, 32, 32, PL_FMT_CAP_SAMPLEABLE);
+    REQUIRE(src_fmt);
+
+    float src_px[HDR_KAT_MAX_PATCHES][4];
+    for (int i = 0; i < num; i++) {
+        for (int c = 0; c < 3; c++)
+            src_px[i][c] = patches[i][c] / PL_COLOR_SDR_WHITE; // NORM scale
+        src_px[i][3] = 1.0f;
+    }
+
+    pl_tex src = pl_tex_create(gpu, pl_tex_params(
+        .w = num, .h = 1, .format = src_fmt,
+        .sampleable = true, .initial_data = src_px,
+    ));
+    REQUIRE(src);
+
+    struct pl_frame image = {
+        .num_planes = 1,
+        .planes = {{ .texture = src, .components = 3, .component_mapping = {0, 1, 2} }},
+        .repr = pl_color_repr_rgb,
+        .color = {
+            .primaries = src_prim,
+            .transfer = PL_COLOR_TRC_LINEAR,
+            .hdr = { .min_luma = PL_COLOR_HDR_BLACK, .max_luma = HDR_KAT_LW },
+        },
+    };
+
+    struct pl_frame target = {
+        .num_planes = 1,
+        .planes = {{ .texture = fbo, .components = 3, .component_mapping = {0, 1, 2} }},
+        .repr = pl_color_repr_rgb,
+        .color = *dst,
+        .crop = { 0, 0, num, 1 },
+    };
+
+    // Nothing in range needs tone or gamut mapping, so anything but the plain
+    // transfer and primaries conversion would show up as an error
+    struct pl_render_params params = pl_render_default_params;
+    params.dither_params = NULL;
+    params.peak_detect_params = NULL;
+    REQUIRE(pl_render_image(rr, &image, &target, &params));
+
+    uint32_t *out = malloc((size_t) fbo->params.w * fbo->params.h * sizeof(uint32_t));
+    REQUIRE(out);
+    REQUIRE(read_back_fbo(gpu, fbo, (uint8_t *) out));
+
+    bool pq = dst->transfer == PL_COLOR_TRC_PQ;
+    for (int i = 0; i < num; i++) {
+        double want[3];
+        if (src_prim == PL_COLOR_PRIM_BT_709) {
+            ref_bt709_to_bt2020(patches[i], want);
+        } else {
+            memcpy(want, patches[i], sizeof(want));
+        }
+
+        double sig[3], got[3], got_sig[3];
+        if (pq) {
+            for (int c = 0; c < 3; c++)
+                sig[c] = ref_pq_encode(want[c]);
+        } else {
+            ref_hlg_encode(want, dst->hdr.max_luma, dst->hdr.min_luma, sig);
+        }
+
+        // An out of range reference would only test the clipping
+        for (int c = 0; c < 3; c++)
+            REQUIRE(sig[c] > -1e-3 && sig[c] < 1 + 1e-9);
+
+        int code[3];
+        unpack_rgb10a2(out[i], code);
+        for (int c = 0; c < 3; c++) {
+            int ref = (int) lrint(PL_CLAMP(sig[c], 0.0, 1.0) * 1023);
+            int diff = abs(code[c] - ref);
+            if (diff > res->max_code_diff)
+                res->max_code_diff = diff;
+            if (diff > 1) {
+                printf("  patch %d channel %d: got code %d, want %d (%.3f cd/m^2)\n",
+                       i, c, code[c], ref, want[c]);
+            }
+            got_sig[c] = code[c] / 1023.0;
+        }
+
+        if (pq) {
+            for (int c = 0; c < 3; c++)
+                got[c] = ref_pq_decode(got_sig[c]);
+        } else {
+            ref_hlg_decode(got_sig, dst->hdr.max_luma, dst->hdr.min_luma, got);
+        }
+        double de = ref_delta_e_itp(got, want);
+        if (de > res->max_delta_e)
+            res->max_delta_e = de;
+    }
+
+    free(out);
+    pl_tex_destroy(gpu, &src);
+}
+
+// Gates: within one 10-bit code value, and below one JND everywhere
+static void hdr_kat_check(const char *what, const struct hdr_kat_result *res)
+{
+    printf("  %-24s max code diff %d, max ΔE ITP %.3f\n", what,
+           res->max_code_diff, res->max_delta_e);
+    REQUIRE_CMP(res->max_code_diff, <=, 1, "d");
+    REQUIRE_CMP(res->max_delta_e, <, 1.0, "f");
+}
+
+static const struct pl_color_space hdr_kat_spaces[] = {
+    {
+        .primaries = PL_COLOR_PRIM_BT_2020,
+        .transfer = PL_COLOR_TRC_PQ,
+        .hdr = { .min_luma = PL_COLOR_HDR_BLACK, .max_luma = 10000 },
+    }, {
+        .primaries = PL_COLOR_PRIM_BT_2020,
+        .transfer = PL_COLOR_TRC_HLG,
+        .hdr = { .min_luma = PL_COLOR_HDR_BLACK, .max_luma = HDR_KAT_LW },
+    },
+};
+
+// Known-answer test of the PQ and HLG output encoding, against an offscreen
+// 10-bit target
+static void metal_hdr_output_tests(pl_gpu gpu)
+{
+    pl_fmt fmt = pl_find_named_fmt(gpu, "rgb10a2");
+    if (!fmt || !(fmt->caps & PL_FMT_CAP_RENDERABLE) ||
+        !(fmt->caps & PL_FMT_CAP_HOST_READABLE))
+    {
+        printf("metal_hdr_output_tests: no renderable, readable rgb10a2"
+               "... skipping this test\n");
+        return;
+    }
+
+    printf("metal_hdr_output_tests:\n");
+    pl_tex fbo = pl_tex_create(gpu, pl_tex_params(
+        .w = HDR_KAT_MAX_PATCHES, .h = 1, .format = fmt,
+        .renderable = true, .blit_src = true, .blit_dst = true,
+        .host_readable = true,
+    ));
+    REQUIRE(fbo);
+
+    // Pin down the packing that unpack_rgb10a2() assumes
+    uint32_t px[HDR_KAT_MAX_PATCHES];
+    pl_tex_clear(gpu, fbo, (float[4]) { 1.0, 0.0, 0.0, 1.0 });
+    REQUIRE(pl_tex_download(gpu, pl_tex_transfer_params(.tex = fbo, .ptr = px)));
+    REQUIRE_CMP(px[0], ==, 0x3FFu | (3u << 30), "x");
+
+    pl_renderer rr = pl_renderer_create(gpu->log, gpu);
+    REQUIRE(rr);
+    for (int i = 0; i < PL_ARRAY_SIZE(hdr_kat_spaces); i++) {
+        const struct pl_color_space *dst = &hdr_kat_spaces[i];
+        bool pq = dst->transfer == PL_COLOR_TRC_PQ;
+
+        struct hdr_kat_result res = {0};
+        hdr_kat_run(gpu, rr, fbo, dst, PL_COLOR_PRIM_BT_2020, hdr_patches_2020,
+                    PL_ARRAY_SIZE(hdr_patches_2020), &res);
+        hdr_kat_check(pq ? "BT.2020 -> PQ" : "BT.2020 -> HLG", &res);
+
+        res = (struct hdr_kat_result) {0};
+        hdr_kat_run(gpu, rr, fbo, dst, PL_COLOR_PRIM_BT_709, hdr_patches_709,
+                    PL_ARRAY_SIZE(hdr_patches_709), &res);
+        hdr_kat_check(pq ? "BT.709 -> PQ" : "BT.709 -> HLG", &res);
+    }
+
+    pl_renderer_destroy(&rr);
+    pl_tex_destroy(gpu, &fbo);
+}
+
 // Each of these reproduces a hazard that the shared suite cannot see, because
 // it synchronizes (reads back) between most operations.
 
@@ -1315,6 +1621,7 @@ int main(void)
     metal_iosurface_tests(metal->gpu);
     metal_swapchain_tests(metal);
     metal_swapchain_layer_tests(metal);
+    metal_hdr_output_tests(metal->gpu);
     metal_download_stride_test(metal->gpu);
     metal_render_regression(metal->gpu);
     metal_hazard_tests(metal->gpu);
