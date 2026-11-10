@@ -1054,6 +1054,49 @@ static void metal_hdr_output_tests(pl_gpu gpu)
     pl_tex_destroy(gpu, &fbo);
 }
 
+// The same known-answer test, but rendered into real drawables, which covers
+// everything up to the point where the frame is handed to the compositor
+static void metal_swapchain_hdr_tests(pl_metal metal)
+{
+    pl_gpu gpu = metal->gpu;
+    id layer = make_metal_layer(64, 48);
+    if (!layer) {
+        printf("metal_swapchain_hdr_tests: CAMetalLayer unavailable"
+               "... skipping this test\n");
+        return;
+    }
+
+    pl_swapchain sw = pl_metal_create_swapchain(metal,
+        pl_metal_swapchain_params(.layer = (void *) layer));
+    REQUIRE(sw);
+    pl_renderer rr = pl_renderer_create(gpu->log, gpu);
+    REQUIRE(rr);
+    printf("metal_swapchain_hdr_tests:\n");
+
+    for (int i = 0; i < PL_ARRAY_SIZE(hdr_kat_spaces); i++) {
+        pl_swapchain_colorspace_hint(sw, &hdr_kat_spaces[i]);
+        struct pl_swapchain_frame f = {0};
+        REQUIRE(pl_swapchain_start_frame(sw, &f));
+        REQUIRE_CMP(f.color_space.transfer, ==, hdr_kat_spaces[i].transfer, "d");
+        REQUIRE(f.fbo->params.blit_src);
+        REQUIRE(f.fbo->params.format == pl_find_named_fmt(gpu, "rgb10a2"));
+
+        bool pq = f.color_space.transfer == PL_COLOR_TRC_PQ;
+        struct hdr_kat_result res = {0};
+        hdr_kat_run(gpu, rr, f.fbo, &f.color_space, PL_COLOR_PRIM_BT_2020,
+                    hdr_patches_2020, PL_ARRAY_SIZE(hdr_patches_2020), &res);
+        hdr_kat_check(pq ? "drawable, PQ" : "drawable, HLG", &res);
+
+        REQUIRE(pl_swapchain_submit_frame(sw));
+        pl_swapchain_swap_buffers(sw);
+        REQUIRE(!pl_gpu_is_failed(gpu));
+    }
+
+    pl_renderer_destroy(&rr);
+    pl_swapchain_destroy(&sw);
+    ((void (*)(id, SEL)) objc_msgSend)(layer, sel_registerName("release"));
+}
+
 // Each of these reproduces a hazard that the shared suite cannot see, because
 // it synchronizes (reads back) between most operations.
 
@@ -1622,6 +1665,7 @@ int main(void)
     metal_swapchain_tests(metal);
     metal_swapchain_layer_tests(metal);
     metal_hdr_output_tests(metal->gpu);
+    metal_swapchain_hdr_tests(metal);
     metal_download_stride_test(metal->gpu);
     metal_render_regression(metal->gpu);
     metal_hazard_tests(metal->gpu);
