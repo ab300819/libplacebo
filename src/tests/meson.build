@@ -14,9 +14,10 @@ foreach t : tests
   endif
   if t == 'metal.c'
     # The backend only passes IOSurfaceRef through to Metal, but this test
-    # creates and locks real IOSurfaces, so it needs the framework itself.
+    # creates and locks real IOSurfaces and inspects CGColorSpaces, so it needs
+    # those frameworks itself.
     deps += dependency('appleframeworks',
-                       modules: ['IOSurface', 'CoreFoundation'])
+                       modules: ['IOSurface', 'CoreFoundation', 'CoreGraphics'])
   endif
   sources = []
   if gpu_tests.contains(t)

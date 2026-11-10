@@ -20,6 +20,7 @@
 #include "shaders.h"
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CGColorSpace.h>
 #include <CoreGraphics/CGGeometry.h>
 #include <IOKit/IOReturn.h>
 #include <IOSurface/IOSurfaceRef.h>
@@ -666,6 +667,87 @@ static void metal_swapchain_tests(pl_metal metal)
     REQUIRE(!pl_gpu_is_failed(gpu));
 }
 
+// MTLPixelFormat values, from <Metal/MTLPixelFormat.h> (ObjC-only header)
+enum {
+    MTL_PIXEL_FORMAT_BGRA8_UNORM  = 80,
+    MTL_PIXEL_FORMAT_RGB10A2_UNORM = 90,
+    MTL_PIXEL_FORMAT_RGBA16_FLOAT  = 115,
+};
+
+// What a colorspace hint must leave on the CAMetalLayer, since that (and not
+// the pl_swapchain_frame) is what the compositor actually uses
+static void metal_swapchain_layer_tests(pl_metal metal)
+{
+    id layer = make_metal_layer(64, 48);
+    if (!layer) {
+        printf("metal_swapchain_layer_tests: CAMetalLayer unavailable"
+               "... skipping this test\n");
+        return;
+    }
+
+    pl_swapchain sw = pl_metal_create_swapchain(metal,
+        pl_metal_swapchain_params(.layer = (void *) layer));
+    REQUIRE(sw);
+    printf("metal_swapchain_layer_tests:\n");
+
+    SEL edr_sel = sel_registerName("wantsExtendedDynamicRangeContent");
+    bool has_edr = class_respondsToSelector(object_getClass(layer), edr_sel);
+
+    static const struct {
+        enum pl_color_primaries prim;
+        enum pl_color_transfer trc;
+        unsigned long pixel_format;
+        const CFStringRef *name;
+        bool edr;
+    } cases[] = {
+        { PL_COLOR_PRIM_BT_2020,    PL_COLOR_TRC_PQ,     MTL_PIXEL_FORMAT_RGB10A2_UNORM,
+          &kCGColorSpaceITUR_2100_PQ,         true },
+        { PL_COLOR_PRIM_BT_2020,    PL_COLOR_TRC_HLG,    MTL_PIXEL_FORMAT_RGB10A2_UNORM,
+          &kCGColorSpaceITUR_2100_HLG,        true },
+        { PL_COLOR_PRIM_DISPLAY_P3, PL_COLOR_TRC_PQ,     MTL_PIXEL_FORMAT_RGB10A2_UNORM,
+          &kCGColorSpaceDisplayP3_PQ,         true },
+        { PL_COLOR_PRIM_DISPLAY_P3, PL_COLOR_TRC_HLG,    MTL_PIXEL_FORMAT_RGB10A2_UNORM,
+          &kCGColorSpaceDisplayP3_HLG,        true },
+        { PL_COLOR_PRIM_BT_709,     PL_COLOR_TRC_SCRGB,  MTL_PIXEL_FORMAT_RGBA16_FLOAT,
+          &kCGColorSpaceExtendedLinearSRGB,   true },
+        { PL_COLOR_PRIM_BT_709,     PL_COLOR_TRC_LINEAR, MTL_PIXEL_FORMAT_RGBA16_FLOAT,
+          &kCGColorSpaceLinearSRGB,           false },
+        { PL_COLOR_PRIM_DISPLAY_P3, PL_COLOR_TRC_SRGB,   MTL_PIXEL_FORMAT_BGRA8_UNORM,
+          &kCGColorSpaceDisplayP3,            false },
+        { PL_COLOR_PRIM_BT_709,     PL_COLOR_TRC_SRGB,   MTL_PIXEL_FORMAT_BGRA8_UNORM,
+          &kCGColorSpaceSRGB,                 false },
+    };
+
+    for (int i = 0; i < PL_ARRAY_SIZE(cases); i++) {
+        pl_swapchain_colorspace_hint(sw, &(struct pl_color_space) {
+            .primaries = cases[i].prim,
+            .transfer = cases[i].trc,
+        });
+
+        unsigned long pf = ((unsigned long (*)(id, SEL)) objc_msgSend)(
+            layer, sel_registerName("pixelFormat"));
+        CGColorSpaceRef cs = ((CGColorSpaceRef (*)(id, SEL)) objc_msgSend)(
+            layer, sel_registerName("colorspace"));
+        REQUIRE(cs);
+        CFStringRef name = CGColorSpaceCopyName(cs);
+        REQUIRE(name);
+        char buf[128] = "?";
+        CFStringGetCString(name, buf, sizeof(buf), kCFStringEncodingUTF8);
+        printf("  case %d -> pixelFormat %lu, %s\n", i, pf, buf);
+
+        REQUIRE_CMP(pf, ==, cases[i].pixel_format, "lu");
+        REQUIRE(CFEqual(name, *cases[i].name));
+        CFRelease(name);
+        if (has_edr) {
+            bool edr = ((BOOL (*)(id, SEL)) objc_msgSend)(layer, edr_sel);
+            REQUIRE_CMP(edr, ==, cases[i].edr, "d");
+        }
+    }
+
+    pl_swapchain_destroy(&sw);
+    ((void (*)(id, SEL)) objc_msgSend)(layer, sel_registerName("release"));
+}
+
 // Each of these reproduces a hazard that the shared suite cannot see, because
 // it synchronizes (reads back) between most operations.
 
@@ -1232,6 +1314,7 @@ int main(void)
     metal_interop_tests(metal->gpu);
     metal_iosurface_tests(metal->gpu);
     metal_swapchain_tests(metal);
+    metal_swapchain_layer_tests(metal);
     metal_download_stride_test(metal->gpu);
     metal_render_regression(metal->gpu);
     metal_hazard_tests(metal->gpu);
